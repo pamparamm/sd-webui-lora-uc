@@ -158,13 +158,12 @@ def lora_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.Mu
 
             print(f'failed to calculate lora weights for layer {lora_layer_name}')
 
-        if weights_adjusted is not None:
-            if isinstance(self, torch.nn.MultiheadAttention):
-                weights_adjusted = (self.in_proj_weight.to(devices.device, copy=True), self.out_proj.weight.to(devices.device, copy=True))
-            else:
-                weights_adjusted = self.weight.to(devices.device, copy=True)
+        if isinstance(self, torch.nn.MultiheadAttention):
+            weights_adjusted = (self.in_proj_weight.to(devices.device, copy=True), self.out_proj.weight.to(devices.device, copy=True))
+        else:
+            weights_adjusted = self.weight.to(devices.device, copy=True)
 
-            setattr(self, "lora_weights_adjusted", weights_adjusted)
+        setattr(self, "lora_weights_adjusted", weights_adjusted)
 
         setattr(self, "lora_current_names", wanted_names)
 
@@ -282,7 +281,9 @@ def lora_forward(self: Union[torch.nn.Linear, torch.nn.Conv2d, torch.nn.Multihea
     else:
         set_adjusted_weights(self)
 
-    return orig_layer(self, input)
+    result = orig_layer(self, input)
+    set_adjusted_weights(self)
+    return result
 
 
 def lora_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]):
