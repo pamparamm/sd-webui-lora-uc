@@ -18,6 +18,15 @@ extensions_path = Path(paths_internal.extensions_dir)
 lora_path = extensions_builtin_path / "Lora"
 sys.path.insert(0, str(lora_path.absolute()))
 import lora as _lora
+
+has_lycoris = False
+lycoris_paths = [path for path in extensions_path.glob("**/lycoris.py")]
+if lycoris_paths:
+    lycoris_path = lycoris_paths[0].parent
+    sys.path.insert(0, str(lycoris_path.absolute()))
+    has_lycoris = True
+    import lycoris as _lycoris
+
 re_AND = re.compile(r"\bAND\b")
 
 def unload():
@@ -25,12 +34,22 @@ def unload():
     _lora.lora_Linear_forward = _lora.lora_Linear_forward_before_uc
     _lora.lora_Conv2d_forward = _lora.lora_Conv2d_forward_before_uc
     # _lora.lora_MultiheadAttention_forward = _lora.lora_MultiheadAttention_forward_before_uc
+    if has_lycoris:
+        _lycoris.lyco_reset_cached_weight = _lycoris.lyco_reset_cached_weight_before_uc
+        _lycoris.lyco_Linear_forward = _lycoris.lyco_Linear_forward_before_uc
+        _lycoris.lyco_Conv2d_forward = _lycoris.lyco_Conv2d_forward_before_uc
+
 
 def load():
     _lora.lora_reset_cached_weight = lora_reset_cached_weight
     _lora.lora_Linear_forward = lora_Linear_forward
     _lora.lora_Conv2d_forward = lora_Conv2d_forward
     # _lora.lora_MultiheadAttention_forward = lora_MultiheadAttention_forward
+    if has_lycoris:
+        _lycoris.lyco_reset_cached_weight = lyco_reset_cached_weight
+        _lycoris.lyco_Linear_forward = lyco_Linear_forward
+        _lycoris.lyco_Conv2d_forward = lyco_Conv2d_forward
+
 
 if not hasattr(_lora, 'lora_reset_cached_weight_before_uc'):
     _lora.lora_reset_cached_weight_before_uc = _lora.lora_reset_cached_weight
@@ -43,6 +62,16 @@ if not hasattr(_lora, 'lora_Conv2d_forward_before_uc'):
 
 # if not hasattr(_lora, 'lora_MultiheadAttention_forward_before_uc'):
 #     _lora.lora_MultiheadAttention_forward_before_uc = _lora.lora_MultiheadAttention_forward
+
+if has_lycoris:
+    if not hasattr(_lycoris, 'lyco_reset_cached_weight_before_uc'):
+        _lycoris.lyco_reset_cached_weight_before_uc = _lycoris.lyco_reset_cached_weight
+
+    if not hasattr(_lycoris, 'lyco_Linear_forward_before_uc'):
+        _lycoris.lyco_Linear_forward_before_uc = _lycoris.lyco_Linear_forward
+
+    if not hasattr(_lycoris, 'lyco_Conv2d_forward_before_uc'):
+        _lycoris.lyco_Conv2d_forward_before_uc = _lycoris.lyco_Conv2d_forward
 
 
 script_callbacks.on_script_unloaded(unload)
@@ -68,6 +97,13 @@ class LoraUcScript(scripts.Script):
         is_enabled = enabled
         if is_enabled:
             p.extra_generation_params["Disable Lora for UC"] = True
+            if has_lycoris:
+                torch.nn.Linear.forward = _lycoris.lyco_Linear_forward
+                torch.nn.Linear._load_from_state_dict = _lycoris.lyco_Linear_load_state_dict
+                torch.nn.Conv2d.forward = _lycoris.lyco_Conv2d_forward
+                torch.nn.Conv2d._load_from_state_dict = _lycoris.lyco_Conv2d_load_state_dict
+                torch.nn.MultiheadAttention.forward = _lycoris.lyco_MultiheadAttention_forward
+                torch.nn.MultiheadAttention._load_from_state_dict = _lycoris.lyco_MultiheadAttention_load_state_dict
             prompt = p.all_prompts[0]
             num_batches = p.batch_size
             load_prompt_loras(prompt)
@@ -96,8 +132,15 @@ def load_prompt_loras(prompt: str):
             multiplier = float(params.items[1]) if len(params.items) > 1 else 1.0
             loras[name] = multiplier
 
+        if has_lycoris:
+            for params in extra_network_data['lyco']:
+                name = params.items[0]
+                multiplier = float(params.items[1]) if len(params.items) > 1 else 1.0
+                loras[name] = multiplier
+
         tmp_prompt_loras.append(loras)
     prompt_loras.extend(tmp_prompt_loras * num_batches)
+
 
 def lora_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.MultiheadAttention]):
     """
@@ -195,6 +238,9 @@ def set_backup_weights(self: torch.nn.Conv2d | torch.nn.Linear | torch.nn.Multih
 def lora_forward(self: Union[torch.nn.Linear, torch.nn.Conv2d, torch.nn.MultiheadAttention], input: Tensor):
     global text_model_encoder_counter
     global diffusion_model_counter
+    loaded_loras = len(_lora.loaded_loras)
+    if has_lycoris:
+        loaded_loras += len(_lycoris.loaded_lycos)
 
     orig_layer: Union[torch.nn.Linear, torch.nn.Conv2d, torch.nn.MultiheadAttention] = None # type: ignore
     if isinstance(self, torch.nn.Linear):
@@ -213,7 +259,7 @@ def lora_forward(self: Union[torch.nn.Linear, torch.nn.Conv2d, torch.nn.Multihea
     if lora_layer_name is None:
         return orig_layer(self, input)
 
-    if len(_lora.loaded_loras) == 0:
+    if loaded_loras == 0:
         return orig_layer(self, input)
 
     lora_layer_name: str | None = getattr(self, 'lora_layer_name', None)
@@ -222,7 +268,7 @@ def lora_forward(self: Union[torch.nn.Linear, torch.nn.Conv2d, torch.nn.Multihea
     
     set_backup_weights(self)
 
-    num_loras = len(_lora.loaded_loras)
+    num_loras = loaded_loras
     if text_model_encoder_counter == -1:
         text_model_encoder_counter = len(prompt_loras) * num_loras
 
@@ -303,6 +349,99 @@ def lora_Conv2d_forward(self: torch.nn.Conv2d, input: Tensor):
         lora_apply_weights(self)
         return lora_forward(self, input)
 
+if has_lycoris:
+    def lyco_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.MultiheadAttention]):
+        """
+        Applies the currently selected set of Lycos to the weights of torch layer self.
+        If weights already have this particular set of lycos applied, does nothing.
+        If not, restores orginal weights from backup and alters weights according to lycos.
+        """
+
+        lyco_layer_name = getattr(self, 'lyco_layer_name', None)
+        if lyco_layer_name is None:
+            return
+
+        current_names = getattr(self, "lyco_current_names", ())
+        lora_prev_names = getattr(self, "lora_prev_names", ())
+        lora_names = getattr(self, "lora_current_names", ())
+        wanted_names = tuple((x.name, x.te_multiplier, x.unet_multiplier, x.dyn_dim) for x in _lycoris.loaded_lycos)
+
+        weights_backup = getattr(self, "lora_weights_backup", None)
+        weights_adjusted = getattr(self, "lora_weights_adjusted", None)
+
+        if weights_backup is None:
+            if isinstance(self, torch.nn.MultiheadAttention):
+                weights_backup = (self.in_proj_weight.to(devices.device, copy=True), self.out_proj.weight.to   (devices.device, copy=True))
+            else:
+                weights_backup = self.weight.to(devices.device, copy=True)
+            self.lora_weights_backup = weights_backup
+
+        if current_names != wanted_names or lora_prev_names != lora_names:
+            if weights_backup is not None and lora_names == ():
+                if isinstance(self, torch.nn.MultiheadAttention):
+                    self.in_proj_weight.copy_(weights_backup[0])
+                    self.out_proj.weight.copy_(weights_backup[1])
+                else:
+                    self.weight.copy_(weights_backup)
+
+            for lyco in _lycoris.loaded_lycos:
+                module = lyco.modules.get(lyco_layer_name, None)
+                multiplier = (
+                    lyco.te_multiplier if 'transformer' in lyco_layer_name[:20] 
+                    else lyco.unet_multiplier
+                )
+                if module is not None and hasattr(self, 'weight'):
+                    # print(lyco_layer_name, multiplier)
+                    self.weight += _lycoris.lyco_calc_updown(lyco, module, self.weight) * multiplier
+                    continue
+
+                module_q = lyco.modules.get(lyco_layer_name + "_q_proj", None)
+                module_k = lyco.modules.get(lyco_layer_name + "_k_proj", None)
+                module_v = lyco.modules.get(lyco_layer_name + "_v_proj", None)
+                module_out = lyco.modules.get(lyco_layer_name + "_out_proj", None)
+
+                if isinstance(self, torch.nn.MultiheadAttention) and module_q and module_k and module_v and     module_out:
+                    updown_q = _lycoris.lyco_calc_updown(lyco, module_q, self.in_proj_weight)
+                    updown_k = _lycoris.lyco_calc_updown(lyco, module_k, self.in_proj_weight)
+                    updown_v = _lycoris.lyco_calc_updown(lyco, module_v, self.in_proj_weight)
+                    updown_qkv = torch.vstack([updown_q, updown_k, updown_v])
+
+                    self.in_proj_weight += updown_qkv
+                    self.out_proj.weight += _lycoris.lyco_calc_updown(lyco, module_out, self.out_proj.weight)
+                    continue
+
+                if module is None:
+                    continue
+
+                print(f'failed to calculate lyco weights for layer {lyco_layer_name}')
+            
+            if isinstance(self, torch.nn.MultiheadAttention):
+                weights_adjusted = (self.in_proj_weight.to(devices.device, copy=True), self.out_proj.weight.to  (devices.device, copy=True))
+            else:
+                weights_adjusted = self.weight.to(devices.device, copy=True)
+            
+            setattr(self, "lora_weights_adjusted", weights_adjusted)
+
+            setattr(self, "lora_prev_names", lora_names)
+            setattr(self, "lyco_current_names", wanted_names)
+
+
+    def lyco_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]):
+        setattr(self, "lyco_current_names", ())
+        setattr(self, "lora_weights_backup", None)
+        setattr(self, "lora_weights_adjusted", None)
+
+
+    def lyco_Linear_forward(self: torch.nn.Linear, input: Tensor):
+        with torch.no_grad():
+            lyco_apply_weights(self)
+            return lora_forward(self, input)
+
+
+    def lyco_Conv2d_forward(self: torch.nn.Conv2d, input: Tensor):
+        with torch.no_grad():
+            lyco_apply_weights(self)
+            return lora_forward(self, input)
 
 # def lora_MultiheadAttention_forward(self: torch.nn.MultiheadAttention, *args, **kwargs):
 #     with torch.no_grad():
