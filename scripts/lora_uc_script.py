@@ -219,7 +219,7 @@ def lora_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.Mu
         setattr(self, "lora_weights_adjusted", weights_adjusted)
 
 
-def set_adjusted_weights(self: torch.nn.Conv2d | torch.nn.Linear | torch.nn.MultiheadAttention):
+def set_adjusted_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.MultiheadAttention]):
     if isinstance(self, torch.nn.MultiheadAttention):
         self.in_proj_weight.data = self.lora_weights_adjusted[0]
         self.out_proj.weight.data = self.lora_weights_adjusted[1]
@@ -227,7 +227,7 @@ def set_adjusted_weights(self: torch.nn.Conv2d | torch.nn.Linear | torch.nn.Mult
         self.weight.data = self.lora_weights_adjusted
 
 
-def set_backup_weights(self: torch.nn.Conv2d | torch.nn.Linear | torch.nn.MultiheadAttention):
+def set_backup_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.MultiheadAttention]):
     if isinstance(self, torch.nn.MultiheadAttention):
         self.in_proj_weight.data = self.lora_weights_backup[0]
         self.out_proj.weight.data = self.lora_weights_backup[1]
