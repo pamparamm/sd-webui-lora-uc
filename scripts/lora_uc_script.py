@@ -39,22 +39,24 @@ def unload():
     _lora.lora_reset_cached_weight = _lora.lora_reset_cached_weight_before_uc
     _lora.lora_Linear_forward = _lora.lora_Linear_forward_before_uc
     _lora.lora_Conv2d_forward = _lora.lora_Conv2d_forward_before_uc
-    # _lora.lora_MultiheadAttention_forward = _lora.lora_MultiheadAttention_forward_before_uc
+    _lora.lora_MultiheadAttention_forward = _lora.lora_MultiheadAttention_forward_before_uc
     if has_lycoris:
         _lycoris.lyco_reset_cached_weight = _lycoris.lyco_reset_cached_weight_before_uc
         _lycoris.lyco_Linear_forward = _lycoris.lyco_Linear_forward_before_uc
         _lycoris.lyco_Conv2d_forward = _lycoris.lyco_Conv2d_forward_before_uc
+        _lycoris.lyco_MultiheadAttention_forward = _lycoris.lyco_MultiheadAttention_forward_before_uc
 
 
 def load():
     _lora.lora_reset_cached_weight = lora_reset_cached_weight
     _lora.lora_Linear_forward = lora_Linear_forward
     _lora.lora_Conv2d_forward = lora_Conv2d_forward
-    # _lora.lora_MultiheadAttention_forward = lora_MultiheadAttention_forward
+    _lora.lora_MultiheadAttention_forward = lora_MultiheadAttention_forward
     if has_lycoris:
         _lycoris.lyco_reset_cached_weight = lyco_reset_cached_weight
         _lycoris.lyco_Linear_forward = lyco_Linear_forward
         _lycoris.lyco_Conv2d_forward = lyco_Conv2d_forward
+        _lycoris.lyco_MultiheadAttention_forward = lyco_MultiheadAttention_forward
 
 
 if not hasattr(_lora, 'lora_reset_cached_weight_before_uc'):
@@ -66,8 +68,8 @@ if not hasattr(_lora, 'lora_Linear_forward_before_uc'):
 if not hasattr(_lora, 'lora_Conv2d_forward_before_uc'):
     _lora.lora_Conv2d_forward_before_uc = _lora.lora_Conv2d_forward
 
-# if not hasattr(_lora, 'lora_MultiheadAttention_forward_before_uc'):
-#     _lora.lora_MultiheadAttention_forward_before_uc = _lora.lora_MultiheadAttention_forward
+if not hasattr(_lora, 'lora_MultiheadAttention_forward_before_uc'):
+    _lora.lora_MultiheadAttention_forward_before_uc = _lora.lora_MultiheadAttention_forward
 
 if has_lycoris:
     if not hasattr(_lycoris, 'lyco_reset_cached_weight_before_uc'):
@@ -78,6 +80,9 @@ if has_lycoris:
 
     if not hasattr(_lycoris, 'lyco_Conv2d_forward_before_uc'):
         _lycoris.lyco_Conv2d_forward_before_uc = _lycoris.lyco_Conv2d_forward
+
+    if not hasattr(_lora, 'lyco_MultiheadAttention_forward_before_uc'):
+        _lycoris.lyco_MultiheadAttention_forward_before_uc = _lycoris.lyco_MultiheadAttention_forward
 
 script_callbacks.on_script_unloaded(unload)
 
@@ -102,7 +107,7 @@ class LoraUcScript(scripts.Script):
         global num_batches
 
         is_enabled = enabled
-        if has_lycoris: # Helps to override extensions-builtin LoRA load priority
+        if has_lycoris:  # Helps to override extensions-builtin LoRA load priority
             torch.nn.Linear.forward = _lycoris.lyco_Linear_forward
             torch.nn.Linear._load_from_state_dict = _lycoris.lyco_Linear_load_state_dict
             torch.nn.Conv2d.forward = _lycoris.lyco_Conv2d_forward
@@ -277,14 +282,24 @@ def lora_forward(self: Union[torch.nn.Linear, torch.nn.Conv2d,
 
     orig_layer: Union[torch.nn.Linear, torch.nn.Conv2d,
                       torch.nn.MultiheadAttention] = None  # type: ignore
-    if isinstance(self, torch.nn.Linear):
-        orig_layer = torch.nn.Linear_forward_before_lora
-    elif isinstance(self, torch.nn.Conv2d):
-        orig_layer = torch.nn.Conv2d_forward_before_lora
-    # elif isinstance(self, torch.nn.MultiheadAttention):
-    #     orig_layer = torch.nn.MultiheadAttention_forward_before_lora
+    if not has_lycoris:
+        if isinstance(self, torch.nn.Linear):
+            orig_layer = torch.nn.Linear_forward_before_lora
+        elif isinstance(self, torch.nn.Conv2d):
+            orig_layer = torch.nn.Conv2d_forward_before_lora
+        elif isinstance(self, torch.nn.MultiheadAttention):
+            orig_layer = torch.nn.MultiheadAttention_forward_before_lora
+        else:
+            raise ValueError("Unsupported layer")
     else:
-        raise ValueError("Unsupported layer")
+        if isinstance(self, torch.nn.Linear):
+            orig_layer = torch.nn.Linear_forward_before_lyco
+        elif isinstance(self, torch.nn.Conv2d):
+            orig_layer = torch.nn.Conv2d_forward_before_lyco
+        elif isinstance(self, torch.nn.MultiheadAttention):
+            orig_layer = torch.nn.MultiheadAttention_forward_before_lyco
+        else:
+            raise ValueError("Unsupported layer")
 
     if not is_enabled or loaded_loras == 0:
         return orig_layer(self, input)
@@ -385,17 +400,17 @@ def lora_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]):
     setattr(self, "lora_weights_backup", None)
     setattr(self, "lora_weights_adjusted", None)
 
+def lora_Linear_forward(self: torch.nn.Linear, input: Tensor) -> Tensor:
+    lora_apply_weights(self)
+    return lora_forward(self, input)
 
-def lora_Linear_forward(self: torch.nn.Linear, input: Tensor):
-    with torch.no_grad():
-        lora_apply_weights(self)
-        return lora_forward(self, input)
+def lora_Conv2d_forward(self: torch.nn.Conv2d, input: Tensor) -> Tensor:
+    lora_apply_weights(self)
+    return lora_forward(self, input)
 
-
-def lora_Conv2d_forward(self: torch.nn.Conv2d, input: Tensor):
-    with torch.no_grad():
-        lora_apply_weights(self)
-        return lora_forward(self, input)
+def lora_MultiheadAttention_forward(self: torch.nn.MultiheadAttention, *args, **kwargs) -> Tensor:
+    lora_apply_weights(self)
+    return torch.nn.MultiheadAttention_forward_before_lora(self, *args, **kwargs)
 
 
 if has_lycoris:
@@ -512,19 +527,18 @@ if has_lycoris:
         setattr(self, "lora_weights_backup", None)
         setattr(self, "lora_weights_adjusted", None)
 
-    def lyco_Linear_forward(self: torch.nn.Linear, input: Tensor):
+    def lyco_Linear_forward(self: torch.nn.Linear, input: Tensor) -> Tensor:
         lyco_apply_weights(self)
         return lora_forward(self, input)
 
-    def lyco_Conv2d_forward(self: torch.nn.Conv2d, input: Tensor):
+    def lyco_Conv2d_forward(self: torch.nn.Conv2d, input: Tensor) -> Tensor:
         lyco_apply_weights(self)
         return lora_forward(self, input)
 
+    def lyco_MultiheadAttention_forward(self: torch.nn.MultiheadAttention, *args, **kwargs) -> Tensor:
+        lyco_apply_weights(self)
+        return torch.nn.MultiheadAttention_forward_before_lyco(self, *args, **kwargs)
 
-# def lora_MultiheadAttention_forward(self: torch.nn.MultiheadAttention, *args, **kwargs):
-#     with torch.no_grad():
-#         lora_apply_weights(self)
-#         return torch.nn.MultiheadAttention_forward_before_lora(self, *args, **kwargs)
 
 is_enabled = False
 
