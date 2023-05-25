@@ -12,4 +12,9 @@ So this extension offers option to eliminate the negative effects.
 When checked, script is preventing LoRA weights from being applied to both UC text model encoder and UC denoiser.
 
 ## Compatibilities
-`--always-batch-cond-uncond` must be enabled while using `--medvram` or `--lowvram`
+### WebUI
+- `--always-batch-cond-uncond` must be enabled while using `--medvram` or `--lowvram`
+- `Pad prompt/negative prompt to be same length` in Optimization settings must be enabled
+
+### LyCORIS
+If you are using LyCORIS, move all your LoRAs into LyCORIS folder and use them as lycos.

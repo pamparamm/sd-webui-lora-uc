@@ -305,6 +305,8 @@ def lora_forward(self: Union[torch.nn.Linear, torch.nn.Conv2d,
         return orig_layer(self, input)
 
     lora_layer_name: str | None = getattr(self, 'lora_layer_name', None)
+    if has_lycoris:
+        lora_layer_name = getattr(self, 'lyco_layer_name', None)
     if lora_layer_name is None:
         return orig_layer(self, input)
 
